@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Drone Flight-Log Explainer</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+  <style>
+    :root {
+      --bg: #f4f1ea;
+      --paper: #fffdf8;
+      --ink: #1c1915;
+      --muted: #5e584e;
+      --line: #e3dccf;
+      --accent: #1f4b3a;
+      --ok: #146c2e;
+      --ok-bg: #e5f6e8;
+      --warn: #8a5a00;
+      --warn-bg: #fff4d6;
+      --crit: #9b1c1c;
+      --crit-bg: #fde8e8;
+      --info: #1d4e89;
+      --info-bg: #e7f0fa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.5 "Segoe UI", "Source Sans 3", sans-serif;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 18px 64px; }
+    header h1 { margin: 0 0 6px; font-size: 1.8rem; letter-spacing: -0.03em; }
+    header p { margin: 0; color: var(--muted); max-width: 46rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0; align-items: center; }
+    button, .file-btn {
+      background: var(--accent);
+      color: white;
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 16px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+    button:disabled, .file-btn.disabled { opacity: 0.55; cursor: progress; }
+    .file-btn input { display: none; }
+    .status-line { color: var(--muted); min-height: 1.4em; }
+    .error {
+      background: var(--crit-bg);
+      color: var(--crit);
+      padding: 12px 14px;
+      border-radius: 10px;
+      margin: 8px 0 16px;
+    }
+    .hidden { display: none !important; }
+    .verdict-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 8px 0 16px; }
+    .badge, .pill {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.82rem;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .badge { font-size: 0.95rem; padding: 6px 14px; }
+    .ok { background: var(--ok-bg); color: var(--ok); }
+    .warning { background: var(--warn-bg); color: var(--warn); }
+    .critical { background: var(--crit-bg); color: var(--crit); }
+    .info { background: var(--info-bg); color: var(--info); }
+    .no_data { background: #eee; color: #555; }
+    .cards, .charts, .sections { display: grid; gap: 14px; }
+    .cards { grid-template-columns: repeat(4, 1fr); margin-bottom: 18px; }
+    .charts { grid-template-columns: 1fr 1fr; }
+    .card, .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px 16px;
+    }
+    .card span { display: block; color: var(--muted); font-size: 0.82rem; }
+    .card strong { font-size: 1.35rem; }
+    .chart-box { height: 260px; }
+    .chart-note { color: var(--muted); font-size: 0.85rem; margin: 8px 0 0; }
+    h2 { font-size: 1.15rem; margin: 28px 0 10px; }
+    .finding { display: grid; grid-template-columns: auto 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+    .finding p { margin: 2px 0 0; color: var(--muted); }
+    ol.checklist { margin: 0; padding-left: 1.2rem; }
+    ol.checklist li { margin: 8px 0; }
+    .priority { color: var(--muted); font-size: 0.8rem; }
+    .explanation { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; padding: 8px 18px 16px; }
+    .explanation h2 { margin-top: 18px; }
+    footer { margin-top: 28px; color: var(--muted); font-size: 0.9rem; }
+    @media (max-width: 800px) {
+      .cards, .charts { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Drone Flight-Log Explainer</h1>
+      <p>Upload an ArduCopter or Pixhawk <code>.BIN</code> log. The app checks battery, vibration, GPS, and autopilot warnings, then explains the findings in plain language.</p>
+    </header>
+    <div class="actions">
+      <label class="file-btn" id="upload-label">
+        Upload .BIN
+        <input id="file" type="file" accept=".bin,.BIN">
+      </label>
+      <button class="secondary" id="demo" type="button">Try demo flight</button>
+      <span class="status-line" id="status"></span>
+    </div>
+    <div id="error" class="error hidden"></div>
+    <div id="report" class="hidden">
+      <div class="verdict-row">
+        <span id="verdict" class="badge"></span>
+        <span id="file-name"></span>
+      </div>
+      <div class="cards" id="cards"></div>
+      <h2>Charts</h2>
+      <div class="charts" id="charts"></div>
+      <h2>Findings</h2>
+      <div id="findings"></div>
+      <h2>Before your next flight</h2>
+      <div class="panel"><ol class="checklist" id="checklist"></ol></div>
+      <h2>Explanation</h2>
+      <div class="explanation" id="explanation"></div>
+      <div id="parse-warnings"></div>
+      <footer>
+        <div id="source"></div>
+        <div>This is a diagnostic aid, not a substitute for a qualified inspection.</div>
+      </footer>
+    </div>
+  </div>
+  <script>
+    const charts = [];
+    const fileInput = document.getElementById("file");
+    const demoBtn = document.getElementById("demo");
+    const statusEl = document.getElementById("status");
+    const errorEl = document.getElementById("error");
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      const body = new FormData();
+      body.append("file", file);
+      run("/api/analyze", { method: "POST", body });
+    });
+    demoBtn.addEventListener("click", () => run("/api/demo", { method: "POST" }));
+
+    async function run(url, options) {
+      setBusy(true, "Analyzing flight log…");
+      errorEl.classList.add("hidden");
+      try {
+        const response = await fetch(url, options);
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.detail || data.error || "Analysis failed");
+        }
+        render(data);
+        statusEl.textContent = "Report ready.";
+      } catch (err) {
+        errorEl.textContent = err.message || "Something went wrong.";
+        errorEl.classList.remove("hidden");
+        statusEl.textContent = "";
+      } finally {
+        setBusy(false);
+        fileInput.value = "";
+      }
+    }
+
+    function setBusy(busy, message) {
+      demoBtn.disabled = busy;
+      document.getElementById("upload-label").classList.toggle("disabled", busy);
+      fileInput.disabled = busy;
+      if (message) statusEl.textContent = message;
+    }
+
+    function render(report) {
+      document.getElementById("report").classList.remove("hidden");
+      const verdict = document.getElementById("verdict");
+      verdict.textContent = report.verdict || "ok";
+      verdict.className = "badge " + (report.verdict || "ok");
+      document.getElementById("file-name").textContent = report.file_name || "";
+
+      const summary = report.summary || {};
+      const counts = summary.findings_count || {};
+      const cards = [
+        ["Duration", fmtTime(summary.duration_s)],
+        ["Max altitude", summary.max_alt_m == null ? "—" : summary.max_alt_m + " m"],
+        ["Mode changes", String(summary.mode_changes ?? 0)],
+        ["Findings", (counts.critical || 0) + " critical · " + (counts.warning || 0) + " warning · " + (counts.info || 0) + " info"]
+      ];
+      document.getElementById("cards").innerHTML = cards.map(([label, value]) =>
+        "<div class='card'><span>" + esc(label) + "</span><strong>" + esc(value) + "</strong></div>"
+      ).join("");
+
+      drawCharts(report);
+      drawFindings(report.sections || {});
+      const list = document.getElementById("checklist");
+      const items = report.checklist || [];
+      list.innerHTML = items.length
+        ? items.map((item) => "<li><span class='priority'>Priority " + esc(item.priority) + ".</span> " + esc(item.item) + "</li>").join("")
+        : "<li>No inspection items from these rules.</li>";
+      document.getElementById("explanation").innerHTML = renderMarkdown(report.explanation && report.explanation.markdown || "");
+      const source = report.explanation && report.explanation.source === "llm" ? "AI" : "template";
+      document.getElementById("source").textContent = "Explanation source: " + source;
+      const notes = report.parse_warnings || [];
+      document.getElementById("parse-warnings").innerHTML = notes.length
+        ? "<h2>Parse notes</h2><div class='panel'>" + notes.map((n) => "<div>" + esc(n) + "</div>").join("") + "</div>"
+        : "";
+    }
+
+    function drawCharts(report) {
+      charts.splice(0).forEach((chart) => chart.destroy());
+      const ts = report.timeseries || {};
+      const time = ts.time_s || [];
+      const marks = criticalTimes(report.sections || {});
+      const host = document.getElementById("charts");
+      host.innerHTML = [
+        panel("Battery voltage and current", "chart-power", "Times marked in red are critical findings."),
+        panel("Battery remaining", "chart-rem", ""),
+        panel("Vibration", "chart-vibe", "The dashed line is 60 m/s²."),
+        panel("GPS", "chart-gps", "HDOP is a unitless accuracy figure. Lower is better.")
+      ].join("");
+
+      charts.push(new Chart(document.getElementById("chart-power"), {
+        type: "line",
+        data: {
+          datasets: [
+            dataset("Voltage (V)", "#1f4b3a", series(time, ts.voltage), "y"),
+            dataset("Current (A)", "#b45309", series(time, ts.current), "y1")
+          ]
+        },
+        options: options("Time (s)", "Volts", "Amps", marks)
+      }));
+      charts.push(new Chart(document.getElementById("chart-rem"), {
+        type: "line",
+        data: { datasets: [dataset("Remaining %", "#1d4e89", series(time, ts.rem_pct), "y")] },
+        options: options("Time (s)", "Percent", null, marks)
+      }));
+      charts.push(new Chart(document.getElementById("chart-vibe"), {
+        type: "line",
+        data: {
+          datasets: [
+            dataset("VibeX", "#9b1c1c", series(time, ts.vibe_x), "y"),
+            dataset("VibeY", "#1d4e89", series(time, ts.vibe_y), "y"),
+            dataset("VibeZ", "#1f4b3a", series(time, ts.vibe_z), "y")
+          ]
+        },
+        options: options("Time (s)", "m/s²", null, marks, 60)
+      }));
+      charts.push(new Chart(document.getElementById("chart-gps"), {
+        type: "line",
+        data: {
+          datasets: [
+            dataset("Satellites", "#1f4b3a", series(time, ts.nsats), "y"),
+            dataset("HDOP", "#7c3aed", series(time, ts.hdop), "y1")
+          ]
+        },
+        options: options("Time (s)", "Satellites", "HDOP", marks)
+      }));
+
+      host.querySelectorAll(".chart-note").forEach((node, index) => {
+        if (index === 0 && marks.length) {
+          node.textContent = "Critical finding times: " + marks.map(fmtTime).join(", ") + ".";
+        }
+      });
+    }
+
+    function panel(title, id, note) {
+      return "<div class='panel'><strong>" + esc(title) + "</strong><div class='chart-box'><canvas id='" + id + "'></canvas></div>"
+        + (note ? "<p class='chart-note'>" + esc(note) + "</p>" : "") + "</div>";
+    }
+
+    function dataset(label, color, data, yAxis) {
+      return { label, data, yAxisID: yAxis, borderColor: color, backgroundColor: color, pointRadius: 0, borderWidth: 1.6, tension: 0.15, spanGaps: true };
+    }
+
+    function series(time, values) {
+      const rows = values || [];
+      return time.map((t, i) => ({ x: t, y: rows[i] == null ? null : rows[i] }));
+    }
+
+    function options(xTitle, yTitle, y1Title, marks, yLine) {
+      const annotations = {};
+      marks.forEach((t, i) => {
+        annotations["mark" + i] = { type: "line", xMin: t, xMax: t, borderColor: "rgba(155, 28, 28, 0.75)", borderWidth: 1 };
+      });
+      if (yLine != null) {
+        annotations.level = { type: "line", yMin: yLine, yMax: yLine, borderColor: "rgba(90, 90, 90, 0.7)", borderDash: [6, 4], borderWidth: 1 };
+      }
+      const scales = {
+        x: { type: "linear", title: { display: true, text: xTitle } },
+        y: { title: { display: true, text: yTitle } }
+      };
+      if (y1Title) {
+        scales.y1 = { position: "right", title: { display: true, text: y1Title }, grid: { drawOnChartArea: false } };
+      }
+      return {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { position: "bottom" }, annotation: { annotations } },
+        scales
+      };
+    }
+
+    function criticalTimes(sections) {
+      const times = [];
+      Object.values(sections).forEach((section) => {
+        (section.findings || []).forEach((item) => {
+          if (item.severity === "critical" && item.time_s != null) times.push(item.time_s);
+        });
+      });
+      return Array.from(new Set(times)).sort((a, b) => a - b);
+    }
+
+    function drawFindings(sections) {
+      const order = ["battery", "vibration", "gps", "warnings"];
+      const root = document.getElementById("findings");
+      root.innerHTML = order.map((name) => {
+        const section = sections[name] || { status: "no_data", findings: [] };
+        const findings = section.findings || [];
+        const body = findings.length
+          ? findings.map((item) => {
+              const when = item.time_s == null ? "" : " · " + fmtTime(item.time_s);
+              return "<div class='finding'><span class='pill " + esc(item.severity) + "'>" + esc(item.severity) + "</span><div><strong>"
+                + esc(item.title) + esc(when) + "</strong><p>" + esc(item.detail) + "</p></div></div>";
+            }).join("")
+          : "<p>No findings. Status: " + esc(section.status || "ok") + ".</p>";
+        return "<div class='panel'><strong>" + esc(cap(name)) + "</strong> <span class='pill " + esc(section.status || "ok") + "'>"
+          + esc(section.status || "ok") + "</span>" + body + "</div>";
+      }).join("");
+    }
+
+    function renderMarkdown(markdown) {
+      const safe = esc(markdown || "");
+      if (window.marked && typeof marked.parse === "function") return marked.parse(safe);
+      return safe.split(/\n\n+/).map((block) => "<p>" + block.replace(/\n/g, "<br>") + "</p>").join("");
+    }
+
+    function fmtTime(seconds) {
+      if (seconds == null || Number.isNaN(Number(seconds))) return "—";
+      const total = Math.max(0, Math.round(Number(seconds)));
+      return Math.floor(total / 60) + ":" + String(total % 60).padStart(2, "0");
+    }
+
+    function cap(text) { return text.charAt(0).toUpperCase() + text.slice(1); }
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[ch]));
+    }
+  </script>
+</body>
+</html>
